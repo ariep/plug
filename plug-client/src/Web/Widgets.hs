@@ -3,14 +3,22 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes #-}
 module Web.Widgets
   ( C, Make, Edit
+  , runC'
+  , Address, Tag
   , editLens
   
   , focus
   , focusAfterBuild
   , focussed
   , hovered
+  , asyncEvent
   , afterBuildAsync
   , Html, html
   , editText
@@ -21,6 +29,7 @@ module Web.Widgets
   , buttonClass
   , buttonClassM
   , buttonDynAttr
+  , leftRightAlign
   , openExternal
   , consumeEvent
 
@@ -31,32 +40,95 @@ module Web.Widgets
   , holdDynInit
 
   , toggleModes
+  , toggleModesDyn
+
   , Tab(Tab), tabs
   ) where
  
-import           Control.Concurrent     (forkIO)
-import           Control.Monad.IO.Class (MonadIO, liftIO)
-import           Control.Lens           (Lens', view, set)
-import           Control.Monad          (when, void)
-import           Control.Monad.Reader   (ReaderT, runReaderT, ask)
-import           Data.List              (find)
+import           Control.Concurrent      (forkIO)
+import           Control.Concurrent.Chan (newChan, readChan, writeChan)
+import           Control.Monad           (forever)
+import           Control.Monad.IO.Class  (MonadIO, liftIO)
+import           Control.Lens            (Lens', view, set)
+import           Control.Monad           (when, void)
+import           Control.Monad.Exception (MonadException, MonadAsyncException)
+import           Control.Monad.Fix       (MonadFix)
+import           Control.Monad.Reader    (MonadReader, ReaderT, runReaderT, ask)
+import           Control.Monad.Ref       (MonadRef, Ref, newRef, readRef, writeRef, modifyRef, modifyRef')
+import           Control.Monad.Trans.Class (MonadTrans, lift)
+import           Data.Functor.Misc       (Const2)
+import           Data.List               (find)
 import qualified Data.Map                 as Map
-import           Data.Monoid            ((<>))
+import           Data.Monoid             ((<>))
 import qualified Data.Text                as Text
-import           Data.Text              (Text)
-import           Data.Traversable       (for)
-import           GHCJS.DOM              (currentWindow, currentDocument)
-import           GHCJS.DOM.Element      (focus, getInnerHTML, setInnerHTML, setOuterHTML)
+import           Data.Text               (Text)
+import           Data.Traversable        (for)
+import           GHCJS.DOM               (currentWindow, currentDocument)
+import           GHCJS.DOM.Element       (focus, getInnerHTML, setInnerHTML, setOuterHTML)
 import           GHCJS.DOM.HTMLInputElement (HTMLInputElement)
-import           GHCJS.DOM.Types        (Document, IsElement)
-import           GHCJS.DOM.Window       (Window, open)
+import           GHCJS.DOM.Types         (Document, IsElement)
+import           GHCJS.DOM.Window        (Window, open)
 import qualified JavaScript.WebSockets.Reflex.WebSocket as WS
 import           Reflex.Dom
 import           Reflex.Dom.Widget.Basic
 import           Reflex.Dom.Contrib.Widgets.Common
+import           Reflex.Host.Class       (MonadReflexCreateTrigger, newEventWithTrigger, newFanEventWithTrigger)
 
-type C t m a
-  = ReaderT (WS.Connection t) m a
+
+newtype C t m a
+  = C (ReaderT (Env t) m a)
+  deriving
+    ( Functor, Applicative, Monad, MonadTrans, MonadFix
+    , MonadIO, MonadException, MonadAsyncException
+    , MonadReader (Env t), HasDocument, HasWebView
+    , MonadSample t, MonadHold t
+    )
+instance (HasPostGui t h m) => HasPostGui t h (C t m) where
+  askPostGui = lift askPostGui
+  askRunWithActions = lift askRunWithActions
+instance (MonadReflexCreateTrigger t m) =>
+  MonadReflexCreateTrigger t (C t m) where
+  newEventWithTrigger = lift . newEventWithTrigger
+  newFanEventWithTrigger initializer = lift $ newFanEventWithTrigger initializer
+instance MonadWidget t m => MonadWidget t (C t m) where
+  type WidgetHost (C t m) = WidgetHost m
+  type GuiAction (C t m) = GuiAction m
+  askParent = lift askParent
+  subWidget n w = do
+    r <- ask
+    lift $ subWidget n $ runC' r w
+  subWidgetWithVoidActions n w = do
+    r <- ask
+    lift $ subWidgetWithVoidActions n $ runC' r w
+  liftWidgetHost = lift . liftWidgetHost
+  schedulePostBuild = lift . schedulePostBuild
+  addVoidAction = lift . addVoidAction
+  getRunWidget = do
+    r <- ask
+    runWidget <- lift getRunWidget
+    return $ \rootElement w -> do
+      (a, postBuild, voidActions) <- runWidget rootElement $ runC' r w
+      return (a, postBuild, voidActions)
+instance MonadRef m => MonadRef (C t m) where
+  type Ref (C t m) = Ref m
+
+  newRef     r   = lift $ newRef     r
+  readRef    r   = lift $ readRef    r
+  writeRef   r x = lift $ writeRef   r x
+  modifyRef  r f = lift $ modifyRef  r f
+  modifyRef' r f = lift $ modifyRef' r f
+
+runC' :: Env t -> C t m a -> m a
+runC' e (C r) = runReaderT r e
+
+type Env t
+  = (WS.Connection t, EventSelector t (Const2 Address Text))
+
+type Address
+  = ([Text], Maybe Tag)
+
+type Tag
+  = Text
 
 type Make t m a
   = C t m (Dynamic t a)
@@ -86,12 +158,21 @@ hovered e = holdDyn False . leftmost $
   , False <$ domEvent Mouseout  e
   ]
 
+asyncEvent :: (MonadWidget t m) => m (Event t a, a -> m ())
+asyncEvent = do
+  chan <- liftIO newChan
+  postBuild <- getPostBuild
+  event <- performEventAsync . ffor postBuild . const $
+    \ trigger -> liftIO . void . forkIO . forever $
+      readChan chan >>= trigger
+  return (event, liftIO . writeChan chan)
+
 afterBuildAsync :: (MonadWidget t m) => C t IO () -> C t m ()
 afterBuildAsync h = do
   con <- ask
   postBuild <- getPostBuild
   performEventAsync . ffor postBuild . const $
-    \ trigger -> void . liftIO . forkIO $ runReaderT h con 
+    \ trigger -> void . liftIO . forkIO $ runC' con h
   return ()
 
 type Html
@@ -145,39 +226,76 @@ editText_ t attrs = do
   dt <- mapDyn Text.pack $ value ti
   return (dt, ti)
 
-buttonClass :: MonadWidget t m => String -> String -> m (Event t ())
+buttonClass :: (MonadWidget t m) => String -> String -> m (Event t ())
 buttonClass c s = buttonClassM c (text s)
 
-buttonClassM :: MonadWidget t m => String -> m () -> m (Event t ())
+buttonClassM :: (MonadWidget t m) => String -> m () -> m (Event t ())
 buttonClassM c = buttonDynAttr $ constDyn $ "class" =: c
 
-buttonDynAttr :: MonadWidget t m =>
+buttonDynAttr :: (MonadWidget t m) =>
   Dynamic t (Map.Map String String) -> m () -> m (Event t ())
 buttonDynAttr attrs s = do
   (e, _) <- elDynAttr' "button" attrs s
   return $ domEvent Click e
+
+leftRightAlign :: (MonadWidget t m) => m a -> m b -> m (a, b)
+leftRightAlign left right = divClass "lr-align" $ do
+  a <- el "div" left
+  b <- el "div" right
+  return (a, b)
 
 type Url
   = String
 
 openExternal :: (Reflex t, MonadIO (PushM t)) =>
   Event t Url -> Event t Window
-openExternal = push $ \ url -> do
-  liftIO currentWindow >>= \case
-    Nothing -> return Nothing
-    Just w  -> liftIO $ putStrLn "opening external window..." >> open w url "export" ""
+openExternal = push $ \ url -> liftIO currentWindow >>= \case
+  Nothing -> return Nothing
+  Just w  -> do
+    liftIO $ putStrLn "opening external window..."
+    open w url "export" ""
 
 consumeEvent :: (MonadWidget t m) => Event t a -> m ()
 consumeEvent e = dynText =<< holdDyn "" ("" <$ e)
 
+-- toggleModes' :: (MonadWidget t m) =>
+--   C t m (Event t ()) -> C t m (Event t ()) -> Make t m Bool
+-- toggleModes' a b = mdo
+--   toggleA <- forDynEvent d $ \case
+--     True  -> fmap (const False) <$> a
+--     False -> fmap (const True ) <$> b
+--   d <- holdDyn True toggleA
+--   return d
+
 toggleModes :: (MonadWidget t m) =>
-  C t m (Event t ()) -> C t m (Event t ()) -> Make t m Bool
-toggleModes a b = mdo
-  toggleA <- forDynEvent d $ \case
-    True  -> fmap (const False) <$> a
-    False -> fmap (const True ) <$> b
-  d <- holdDyn True toggleA
-  return d
+  C t m (Event t ()) -> C t m (Event t ()) -> Make t m (Either () ())
+toggleModes a b = toggleModesDyn (Left ()) (Left ())
+  (const $ flip (,) (constDyn ()) <$> a)
+  (const $ flip (,) (constDyn ()) <$> b)
+
+toggleModesDyn :: (MonadWidget t m) =>
+  Either l r ->
+  Either a b ->
+  (l -> C t m (Event t r, Dynamic t a)) ->
+  (r -> C t m (Event t l, Dynamic t b)) ->
+  Make t m (Either a b)
+toggleModesDyn initState initResult a b = mdo
+  event :: Event t (Event t (Either l r), Dynamic t (Either a b))
+    <- forDynM state $ \case
+      Left l  -> do
+        (e, d) <- a l
+        d' <- mapDyn Left d
+        return (fmap Right e, d')
+      Right r -> do
+        (e, d) <- b r
+        d' <- mapDyn Right d
+        return (fmap Left e, d')
+  state :: Dynamic t (Either l r)
+    <- holdDyn initState =<< switchPromptly never (fst <$> event)
+  result :: Dynamic t (Either a b) <-
+    joinDyn <$> holdDyn (constDyn initResult) (snd <$> event)
+  return result
+
 data Tab t m a
   = Tab String Bool (m (Dynamic t a))
 

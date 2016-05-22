@@ -8,15 +8,16 @@ module Web.Widgets.Multi
   ) where
 
 import Web.Widgets
-import Web.Widgets.Edit
 
 import           Control.Monad.IO.Class (MonadIO)
 import qualified Data.Map                 as Map
 import           Reflex.Dom
 import           Reflex.Dom.Widget.Basic
 
-editMulti :: (MonadWidget t m) => (Bool -> Edit t m a) -> a -> Edit t m [a]
-editMulti editSingle empty initial = divClass "multi" $ mdo
+editMulti :: (MonadWidget t m) =>
+  Bool -> (Bool -> Edit t m a) -> a -> Edit t m [a]
+editMulti inline editSingle empty initial = divClass
+  ((if inline then (++ " multi-inline") else id) "multi") $ mdo
   inputs :: Dynamic t (Map.Map Int
     (Dynamic t a, Event t (Map.Map Int (Maybe a))))
     <- listWithKeyShallowDiff
@@ -29,7 +30,7 @@ editMulti editSingle empty initial = divClass "multi" $ mdo
             (elClass "span" "glyphicon glyphicon-remove" blank)
         return (dc, inputChange)
 
-  newE <- buttonClassM "btn btn-primary btn-xs"
+  newE <- buttonClassM "btn btn-default btn-xs"
     (elClass "span" "glyphicon glyphicon-plus" blank)
   newKey <- mapDyn (+ length initial) =<< count newE
   let addE = attachDynWith

@@ -18,7 +18,7 @@ library
   build-depends:
     base >= 4.8 && < 4.9
     , bytestring >= 0.10 && < 0.11
-    , Coroutine >= 0.2 && < 0.3
-    , ID        >= 0.1 && < 0.2
+    , Coroutine  >= 0.2  && < 0.3
+    , ID         >= 0.1  && < 0.2
   hs-source-dirs:      src
   default-language:    Haskell2010

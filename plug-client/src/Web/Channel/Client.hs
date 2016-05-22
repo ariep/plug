@@ -1,10 +1,17 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE LambdaCase  #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Web.Channel.Client
-  ( sendMany
+  ( runC
+  , sendMany
+  -- , sendManyTag
   , sendManyReceipt
+  , sendManyReceiptTag
   , sendOnce
+  , sendOnceReceipt
+  , sendOnceReceiptTag
+  , sendOnce_
   , sendFile
   , sendFileReceipt
   , get
@@ -13,15 +20,17 @@ module Web.Channel.Client
   ) where
 
 import Web.Channel (ChannelID, showLabel, Channel(..), File)
-import Web.Widgets (C, Make)
+import Web.Widgets (C, Make, Address, Tag, runC')
 
 import           Control.Concurrent          (modifyMVar, modifyMVar_)
 import qualified Control.Coroutine.Monadic   as Co
 import           Control.Coroutine.Monadic   (Session, Eps, (:!:), (:?:), (:?*), (:&:))
+import           Control.Monad.Exception (onException)
 import           Control.Monad.IO.Class      (MonadIO, liftIO)
-import           Control.Monad.Reader        (ask)
+import           Control.Monad.Reader        (runReaderT, ask)
 import qualified Data.ByteString.Lazy        as BSL
 import qualified Data.ByteString.Base64      as B64
+import           Data.Functor.Misc           (Const2(Const2))
 import qualified Data.Map                    as Map
 import           Data.Monoid                 ((<>))
 import           Data.SafeCopy               (SafeCopy, safePut, safeGet)
@@ -36,58 +45,117 @@ import           JavaScript.Web.Blob         (Blob)
 import           Reflex.Dom
 
 
-messageDecode :: (SafeCopy a) => Channel s -> WS.Message -> Maybe a
-messageDecode (Channel i) (WS.TextMessage t) = 
-  let (i', m) = Text.breakOn (Text.pack ":") $ t
-  in if Text.pack (showLabel i) == i'
-    then Just . either e id . C.runGet safeGet . B64.decodeLenient . Text.encodeUtf8 . Text.drop 1 $ m
-    else Nothing
- where
-  e = error "JavaScript.WebSockets.Reflex.WebSocket.messageToBinary: deserialize error"
+runC :: (MonadWidget t m) => Bool -> String -> C t m a -> m a
+runC debug server page = do
+  ws <- WS.connect debug (Text.pack server)
+    `onException` (text "Error: the server could not be contacted.")
+  let selector = fanMap . fmap (uncurry Map.singleton . messageRead) $
+        WS.receiveMessages ws
+  runC' (ws, selector) page 
 
-messageEncode :: (SafeCopy a) => Channel s -> a -> WS.Message
-messageEncode (Channel i) =
+messageRead :: WS.Message -> (Address, Text.Text)
+messageRead (WS.TextMessage t) = readAddress t
+  -- let (a', m) = Text.breakOn (Text.pack ":") $ t
+  --     a = Text.split (== '.') a'
+  -- in (a, Text.drop 1 m)
+
+readAddress :: Text.Text -> (Address, Text.Text)
+readAddress bs = let
+  (i', message') = Text.break (== ':') bs
+  (i, tag) = Text.break (== ';') i'
+  a = Text.split (== '.') i
+  mTag = if Text.null tag then Nothing else Just $ Text.drop 1 tag
+  message = Text.drop 1 message'
+ in
+  ((a, mTag), message)
+
+messageDecode :: (SafeCopy a) => Text.Text -> a
+messageDecode t = either (e t) id .
+  C.runGet safeGet . B64.decodeLenient . Text.encodeUtf8 $ t
+ where
+  e t m = error $ "Web.Channel.Client.messageDecode: deserialize error:\n"
+    ++ show m ++ "\n"
+    ++ show (B64.decodeLenient . Text.encodeUtf8 $ t)
+
+messageEncode :: (SafeCopy a) => Channel s -> Maybe Tag -> a -> WS.Message
+messageEncode (Channel i) mTag =
   WS.TextMessage .
   label i .
   Text.decodeUtf8 .
   B64.encode .
   C.runPut . safePut
  where
-  label = mappend . Text.pack . (++ ":") . showLabel
+  label = mappend . (<> ":") . tag . Text.pack . showLabel
+  tag :: Text.Text -> Text.Text
+  tag = maybe id (\ t a -> a <> ";" <> t) mTag
 
 -- | @sendMany c e@ sends the events represented by @e@ through the
 -- channel @c@. Returns the events of success/failure.
-sendMany :: (MonadWidget t m, SafeCopy a)
-  => Channel (Co.Repeat (a :?: Co.Eps)) -> Event t a
-  -> C t m (Event t ())
-sendMany = sendMany_
+sendMany :: (MonadWidget t m, SafeCopy a) =>
+  Channel (Co.Repeat (a :?: Co.Eps)) -> Event t a ->
+  C t m (Event t ())
+sendMany c = sendMany_ c Nothing
 
-sendManyReceipt :: (MonadWidget t m, SafeCopy a, SafeCopy b)
-  => Channel (Co.Repeat (a :?: (b :!: Co.Eps))) -> Event t a
-  -> C t m (Event t b)
+-- sendManyTag :: (MonadWidget t m, SafeCopy a) =>
+--   Channel (Co.Repeat (a :?: Co.Eps)) -> Tag -> Event t a ->
+--   C t m (Event t ())
+-- sendManyTag c tag = sendMany_ c (Just tag)
+
+sendManyReceipt :: (MonadWidget t m, SafeCopy a, SafeCopy b) =>
+  Channel (Co.Repeat (a :?: (b :!: Co.Eps))) -> Event t a ->
+  C t m (Event t b)
 sendManyReceipt c e = do
-  sendMany_ c e
-  get_ c
+  sendMany_ c Nothing e
+  get_ c Nothing
+
+sendManyReceiptTag :: (MonadWidget t m, SafeCopy a, SafeCopy b) =>
+  Channel (Co.Repeat (a :?: (b :!: Co.Eps))) -> Tag -> Event t a ->
+  C t m (Event t b)
+sendManyReceiptTag c tag e = do
+  sendMany_ c (Just tag) e
+  get_ c (Just tag)
 
 sendOnce :: (MonadIO m, SafeCopy a) =>
-  Channel (Co.Repeat (a :?: s)) -> a ->
+  Channel (Co.Repeat (a :?: Co.Eps)) -> a ->
   C t m ()
-sendOnce c x = ask >>= WS.sendMessage (messageEncode c x)
+sendOnce c x = sendOnce_ c Nothing x
 
-sendMany_ :: (MonadWidget t m, SafeCopy a)
-  => Channel (Co.Repeat s) -> Event t a
-  -> C t m (Event t ())
-sendMany_ c e = ask >>= WS.sendMessages (messageEncode c <$> e)
+sendOnce_ :: (MonadIO m, SafeCopy a) =>
+  Channel (Co.Repeat (a :?: s)) -> Maybe Tag -> a ->
+  C t m ()
+sendOnce_ c mTag x = WS.sendMessage (messageEncode c mTag x) . fst =<< ask
 
-sendFile :: forall t m. (MonadWidget t m, MonadIO (PushM t))
-  => Channel (Co.Repeat (File :?: Co.Eps))
-  -> Event t Blob -> C t m (Event t ())
+sendOnceReceipt :: (MonadWidget t m, SafeCopy a, SafeCopy b) =>
+  Channel (Co.Repeat (a :?: (b :!: Co.Eps))) -> a ->
+  C t m (Event t b)
+sendOnceReceipt c x = do
+  sendOnce_ c Nothing x
+  get_ c Nothing
+  -- Should be better, but doesn't work yet without use of session tags.
+  -- headE =<< get_ c
+
+sendOnceReceiptTag :: (MonadWidget t m, SafeCopy a, SafeCopy b) =>
+  Channel (Co.Repeat (a :?: (b :!: Co.Eps))) -> Tag -> a ->
+  C t m (Event t b)
+sendOnceReceiptTag c tag x = do
+  sendOnce_ c (Just tag) x
+  get_ c (Just tag)
+
+sendMany_ :: (MonadWidget t m, SafeCopy a) =>
+  Channel (Co.Repeat s) -> Maybe Tag -> Event t a ->
+  C t m (Event t ())
+sendMany_ c mTag e = WS.sendMessages (messageEncode c mTag <$> e) . fst =<<
+  ask
+
+sendFile :: forall t m. (MonadWidget t m, MonadIO (PushM t)) =>
+  Channel (Co.Repeat (File :?: Co.Eps)) ->
+  Event t Blob -> C t m (Event t ())
 sendFile = _sendFile
 
-_sendFile :: forall t m s. (MonadWidget t m, MonadIO (PushM t))
-  => Channel s -> Event t Blob -> C t m (Event t ())
+_sendFile :: forall t m s. (MonadWidget t m, MonadIO (PushM t)) =>
+  Channel s -> Event t Blob -> C t m (Event t ())
 _sendFile (Channel i) b = do
-  ws <- ask
+  ws <- fst <$> ask
   -- Annotate blobs with a serial number.
   let e = withCounter (WS.counter ws) b
   -- First notify the server that we wish to send a binary message.
@@ -128,19 +196,21 @@ sendFileReceipt :: forall t m a.
   -> Event t Blob -> C t m (Event t a)
 sendFileReceipt c b = do
   _sendFile c b
-  get_ c
+  get_ c Nothing
 
 get :: (Reflex t, Monad m, SafeCopy a)
   => Channel (a :!: Co.Eps) -> C t m (Event t a)
-get c = get_ c
+get c = get_ c Nothing
 
 getMany :: (Reflex t, Monad m, SafeCopy a)
   => Channel (Co.Repeat (a :!: Co.Eps)) -> C t m (Event t a)
-getMany c = get_ c
+getMany c = get_ c Nothing
 
 get_ :: (Reflex t, Monad m, SafeCopy a)
-  => Channel s -> C t m (Event t a)
-get_ c = fmapMaybe (messageDecode c) . WS.receiveMessages <$> ask
+  => Channel s -> Maybe Tag -> C t m (Event t a)
+get_ (Channel cid) mTag = fmap messageDecode . flip select (Const2 a) . snd <$> ask
+ where
+  a = (map (Text.pack . show) cid, mTag)
 
 getDyn :: (MonadWidget t m, SafeCopy a)
   => Channel (Co.Repeat (a :!: Co.Eps)) -> a -> Make t m a

@@ -77,7 +77,7 @@ sessionGet :: (C.Serialize a) => Session -> Key -> IO (Maybe a)
 sessionGet (l, _) k = fmap (either e id . C.decode) <$> l k where
   e = error . ("Main.sessionGet: decoding failed:\n" ++)
 
-getUser :: M OAuth.User
+getUser :: M ls OAuth.User
 getUser = do
   s <- getSession
   maybeUser <- liftIO $ sessionGet s "user"

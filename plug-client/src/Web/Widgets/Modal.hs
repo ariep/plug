@@ -1,13 +1,16 @@
 module Web.Widgets.Modal
   ( modal
   , dialogue
+  , dialogueExtraFooter
   , confirm
+  , info
   ) where
 
 import Web.Widgets 
 
 import           Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Data.Map                 as Map
+import           Data.Monoid            ((<>))
 import           Data.Traversable       (for)
 import           GHCJS.DOM              (currentWindow, currentDocument)
 import           GHCJS.DOM.Document     (execCommand)
@@ -42,14 +45,20 @@ dialogueOld open cancelText continueText header body = modalSuccess =<< Modal.re
     => Dynamic t (Maybe (Event t (Either e b))) -> m (Event t b)
   modalSuccess d = fmapMaybe (either (const Nothing) Just) <$> switchJust d
 
+
 dialogue :: (MonadWidget t m)
   => Event t a -> String -> String -> String -> m ()
   -> (a -> m (Dynamic t (Either e b))) -> m (Event t b)
-dialogue open cancelText continueText continueClass h b = modal open $
+dialogue open = dialogueExtraFooter open (const $ return never)
+
+dialogueExtraFooter :: (MonadWidget t m)
+  => Event t a -> (a -> m (Event t ())) -> String -> String -> String -> m ()
+  -> (a -> m (Dynamic t (Either e b))) -> m (Event t b)
+dialogueExtraFooter open extra cancelText continueText continueClass h b = modal open $
   \ header body footer a -> do
     header h
     state <- body (b a)
-    footer $ do
+    (extraE, (success, cancel)) <- footer $ leftRightAlign (extra a) $ do
       cancel <- buttonClass "btn btn-default" cancelText
       attrs <- mapDyn (($ "class" =: ("btn " ++ continueClass)) .
         either (const $ mappend $ "disabled" =: "disabled") (const id)) state
@@ -57,6 +66,7 @@ dialogue open cancelText continueText continueClass h b = modal open $
       let success = attachDynWithMaybe
             (\ e () -> either (const Nothing) Just e) state continue
       return (success, cancel)
+    return (success, cancel <> extraE)
 
 modal :: (MonadWidget t m) =>
   Event t a ->
@@ -82,6 +92,17 @@ confirm question cancelText continueText continueClass w = dialogue
   w cancelText continueText continueClass blank $ \ a -> do
     text question
     return $ constDyn $ Right a
+
+info :: (MonadWidget t m)
+  => Event t a -> String -> m ()
+  -> (a -> m ()) -> m (Event t ())
+info open continueText h b = modal open $
+  \ header body footer a -> do
+    header h
+    body (b a)
+    footer $ do
+      continue <- buttonClass "btn btn-default" continueText
+      return (continue, never)
 
 switchJust :: (MonadWidget t m)
   => Dynamic t (Maybe (Event t b)) -> m (Event t b)

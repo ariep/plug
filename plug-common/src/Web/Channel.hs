@@ -1,10 +1,11 @@
 {-# LANGUAGE TypeOperators #-}
 module Web.Channel where
 
-import qualified Data.ByteString.Lazy as BSL
-import qualified Data.ID              as ID
-import           Data.List                 (intercalate)
 import           Control.Coroutine.Monadic (Repeat, Eps, (:?:), (:!:), (:&:))
+import qualified Data.ByteString.Lazy       as BSL
+-- import qualified Data.ByteString.Lazy.Char8 as BSL8
+import qualified Data.ID                    as ID
+import           Data.List                 (intercalate)
 
 -- Idea: how to force that all channels used by the client are served by the
 -- server:
@@ -17,6 +18,9 @@ import           Control.Coroutine.Monadic (Repeat, Eps, (:?:), (:!:), (:&:))
 type ChannelID
   = [Int]
 
+-- type Tag
+--   = String
+
 showLabel :: ChannelID -> String
 showLabel = intercalate "." . map show
 
@@ -26,46 +30,58 @@ data Channel s
 data File
   = File BSL.ByteString
 
--- data Channels
---   = Channels [Channel]
+type Interest i
+  = Repeat ((i, Bool) :?: Eps)
 
--- add :: Channel s -> Channels -> Channels
--- add c
+type Change a
+  = Repeat (a :!: Eps)
 
+-- ID
 
-type List a
-  = Repeat ([ID.WithID a] :!: Eps)
+type CreateID a
+  = Repeat (a :?: ID.ID a :!: Eps)
 
-type Create a
-  = Repeat (a :?: (ID.ID a :!: Eps))
+type LookupID a
+  = Repeat (ID.ID a :?: Maybe (ID.WithID a) :!: Eps)
 
-type Update a
+type UpdateID a
   = Repeat (ID.WithID a :?: Eps)
 
-type Delete a
+type DeleteID a
   = Repeat (ID.ID a :?: Eps)
 
-type MarkDeleted a
+type MarkDeletedID a
   = Repeat (ID.ID a :?: Eps)
 
 newtype Token s
   = Token ChannelID
 
-list :: Token (CRUD a) -> Channel (List a)
-list (Token l) = Channel $ l ++ [0]
-
-create :: Token (CRUD a) -> Channel (Create a)
-create (Token l) = Channel $ l ++ [1]
-
-update :: Token (CRUD a) -> Channel (Update a)
-update (Token l) = Channel $ l ++ [2]
-
-delete :: Token (CRUD a) -> Channel (Delete a)
-delete (Token l) = Channel $ l ++ [3]
-
-markDeleted :: Token (CRUD a) -> Channel (MarkDeleted a)
-markDeleted (Token l) = Channel $ l ++ [4]
-
 data CRUD a
 
--- crud :: Channel (CRUD a)
+-- list :: Token (CRUD a) -> Channel (List a)
+-- list (Token l) = Channel $ l ++ [0]
+
+-- listIDs :: Token (CRUD a) -> Channel (ListIDs a)
+-- listIDs (Token l) = Channel $ l ++ [1]
+
+createID :: Token (CRUD a) -> Channel (CreateID a)
+createID (Token l) = Channel $ l ++ [2]
+
+lookupID :: Token (CRUD a) -> Channel (LookupID a)
+lookupID (Token l) = Channel $ l ++ [3]
+
+updateID :: Token (CRUD a) -> Channel (UpdateID a)
+updateID (Token l) = Channel $ l ++ [4]
+
+deleteID :: Token (CRUD a) -> Channel (DeleteID a)
+deleteID (Token l) = Channel $ l ++ [5]
+
+markDeletedID :: Token (CRUD a) -> Channel (MarkDeletedID a)
+markDeletedID (Token l) = Channel $ l ++ [6]
+
+interestID :: Token (CRUD a) -> Channel (Interest (ID.ID a))
+interestID (Token l) = Channel $ l ++ [7]
+
+changeID :: Token (CRUD a) -> Channel (Change (ID.WithID a))
+changeID (Token l) = Channel $ l ++ [8]
+
