@@ -82,6 +82,6 @@ markDeletedID (Token l) = Channel $ l ++ [6]
 interestID :: Token (CRUD a) -> Channel (Interest (ID.ID a))
 interestID (Token l) = Channel $ l ++ [7]
 
-changeID :: Token (CRUD a) -> Channel (Change (ID.WithID a))
+changeID :: Token (CRUD a) -> Channel (Change [ID.WithID a])
 changeID (Token l) = Channel $ l ++ [8]
 

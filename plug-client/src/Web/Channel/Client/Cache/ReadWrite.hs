@@ -35,13 +35,13 @@ import           Web.Widgets               (C, Make, Address, Tag, asyncEvent)
 data Cache t m id a
   = Cache
     { items   :: SMap.Map id (Either Pending (Dynamic t (Maybe a)))
-    , remotes :: Event t a
+    , remotes :: Event t [a]
     , locals  :: Event t a
     , trigger :: a -> C t m ()
     }
 
 createEmpty :: (SafeCopy a, MonadWidget t m) =>
-  Ch.Channel (Ch.Change a) -> C t m (Cache t m id a)
+  Ch.Channel (Ch.Change [a]) -> C t m (Cache t m id a)
 createEmpty cc = do
   smap <- liftIO SMap.newIO
   remote <- Ch.getMany cc
@@ -74,8 +74,9 @@ current cache relevant item = do
         r       -> return (r      , Keep)
   liftIO (atomically $ SMap.focus u item $ items cache) >>= \case
     Nothing -> do
-      let changeE = leftmost . (locals cache :) . return $
-            ffilter ((== item) . relevant) $ remotes cache
+    -- TODO: design a better way to deal with multiple changes.
+      let changeE = leftmost . (locals cache :) . return . fmap head $
+            ffilter (not . null . filter ((== item) . relevant)) $ remotes cache
       resultDyn <- holdDyn Nothing $ Just <$> changeE
       liftIO . atomically $ SMap.insert (Right resultDyn) item $ items cache
       return resultDyn
