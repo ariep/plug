@@ -17,6 +17,7 @@ module Web.Channel.Server
   , Session
   , getSession
   , getLocalState
+  , except
   ) where
 
 import Web.Channel
@@ -30,6 +31,8 @@ import           Control.Exception         (Exception, SomeException, bracket, f
 import           Control.Monad             (forever, join)
 import           Control.Monad.IO.Class    (MonadIO, liftIO)
 import           Control.Monad.Reader      (ReaderT(ReaderT), runReaderT)
+import           Control.Monad.Trans.Class  (lift)
+import           Control.Monad.Trans.Except (ExceptT, throwE, runExceptT)
 import qualified Data.ByteString.Base64.Lazy     as B64
 import qualified Data.ByteString.Char8           as BS8
 import qualified Data.ByteString.Lazy.Char8      as BSL8
@@ -70,7 +73,7 @@ data Config ls
     , newLocalState :: IO ls
     }
 
-application :: Config ls -> [ServedChannel ls] ->
+application :: (Show e) => Config ls -> [ServedChannel ls e] ->
   WS.ServerApp
 application conf channels pending = do
   let headers = WS.requestHeaders $ WS.pendingRequest pending
@@ -185,13 +188,14 @@ sendSerialized (ws, si) l tagM x = do
   tag = maybe id (\ t a -> a <> ";" <> t)
 
 
-data ServedChannel ls where
-  ServeChannel :: (ServerCoroutine (M ls) s) =>
-    Channel s -> Co.Session (M ls) s Co.Eps () -> ServedChannel ls
+data ServedChannel ls e where
+  ServeChannel :: (ServerCoroutine (M ls e) s) =>
+    Channel s -> Co.Session (M ls e) s Co.Eps () -> ServedChannel ls e
   -- AsyncChannel :: (ServerCoroutine M s, s ~ Repeat r) =>
   --   Channel s -> Co.Session M s Co.Eps () -> ServedChannel
 
-runChannels :: Connection -> Session -> IO ls -> [ServedChannel ls] -> IO ()
+runChannels :: (Show e) =>
+  Connection -> Session -> IO ls -> [ServedChannel ls e] -> IO ()
 runChannels cn session newLs scs = do
   tg <- Threads.new
   ls <- newLs
@@ -205,46 +209,58 @@ runChannels cn session newLs scs = do
     Threads.wait tg
     -- putStrLn $ "Waited for all channels to finish, shutting down connection."
 
-runChannel :: Threads.ThreadGroup -> Connection -> Session -> ls ->
-  ServedChannel ls -> IO (Label, ServerChan)
+runChannel :: (Show e) =>
+  Threads.ThreadGroup -> Connection -> Session -> ls ->
+  ServedChannel ls e -> IO (Label, ServerChan)
 runChannel tg cn session ls (ServeChannel (Channel i) s) = do
   chan <- Conc.newChan
   let l = showLabel i
   tagM <- newMVar Nothing
-  (threadId, _wait) <- Threads.forkIO tg . showExceptions .
+  (threadId, _wait) <- Threads.forkIO tg . showExceptions . showExcept .
     runM cn session l tagM ls chan . serve $ Co.runSession s
   return (l, (chan, threadId, tagM))
  where
   showExceptions :: IO () -> IO ()
   showExceptions = flip catch $ \ (e :: SomeException) ->
     print e >> throwIO e
+  showExcept :: (Show e) => IO (Either e ()) -> IO ()
+  showExcept h = h >>= \case
+    Left e   -> print e >> return ()
+    Right () -> return ()
 
 type Session
   = Wai.Session IO Text.Text BS8.ByteString
 
-newtype M ls a
-  = M (ReaderT (Connection, Session, Label, ServerChan, ls) IO a)
+newtype M ls e a
+  = M
+    (ReaderT (Connection, Session, Label, ServerChan, ls) 
+      (ExceptT e IO)
+    a)
   deriving (Functor, Applicative, Monad, MonadIO)
 
 runM :: Connection -> Session -> Label -> MVar (Maybe Tag) -> ls ->
-  Conc.Chan (Maybe Tag, BSL.ByteString) -> M ls a -> IO a
+  Conc.Chan (Maybe Tag, BSL.ByteString) -> M ls e a -> IO (Either e a)
 runM cn session i tagM ls chan (M h) = do
   threadId <- Conc.myThreadId
-  runReaderT h (cn, session, i, (chan, threadId, tagM), ls)
+  runExceptT $ runReaderT h (cn, session, i, (chan, threadId, tagM), ls)
+  -- TODO: signal any errors to the client here.
 
-getSession :: M ls Session
+except :: e -> M ls e a
+except = M . lift . throwE
+
+getSession :: M ls e Session
 getSession = M . ReaderT $ \ (_, s, _, _, _) -> return s
 
-get :: (SafeCopy a) => M ls a
-get = M . ReaderT $ \ (_, _, _, chan, _) -> receiveSerialized chan
+get :: (SafeCopy a) => M ls e a
+get = M . ReaderT $ \ (_, _, _, chan, _) -> lift $ receiveSerialized chan
 
-getFile :: M ls File
-getFile = M . ReaderT $ \ (_, _, _, chan, _) -> File <$> receiveByteString chan
+getFile :: M ls e File
+getFile = M . ReaderT $ \ (_, _, _, chan, _) -> lift $ File <$> receiveByteString chan
 
-put :: (SafeCopy a) => a -> M ls ()
-put a = M . ReaderT $ \ (cn, _, l, (_, _, tagM), _) -> sendSerialized cn l tagM a
+put :: (SafeCopy a) => a -> M ls e ()
+put a = M . ReaderT $ \ (cn, _, l, (_, _, tagM), _) -> lift $ sendSerialized cn l tagM a
 
-getLocalState :: M ls ls
+getLocalState :: M ls e ls
 getLocalState = M . ReaderT $ \ (_, _, _, _, ls) -> return ls
 
 class ServerCoroutine m s where
@@ -253,24 +269,24 @@ class ServerCoroutine m s where
 -- instance (Monad m) => ServerCoroutine m Co.Eps where
 --   serve (Co.Eps v) = v
 
-instance ServerCoroutine (M ls) Co.Eps where
+instance ServerCoroutine (M ls e) Co.Eps where
   serve (Co.Eps v) = v
 
-instance {-# OVERLAPPING #-} (ServerCoroutine (M ls) s)
-  => ServerCoroutine (M ls) (File :?: s) where
+instance {-# OVERLAPPING #-} (ServerCoroutine (M ls e) s)
+  => ServerCoroutine (M ls e) (File :?: s) where
   serve (Co.R f) = serve =<< f =<< getFile
 
 -- instance {-# OVERLAPPABLE #-} (ServerCoroutine M s, SafeCopy a)
-instance {-# INCOHERENT #-} (ServerCoroutine (M ls) s, SafeCopy a)
-  => ServerCoroutine (M ls) (a :?: s) where
+instance {-# INCOHERENT #-} (ServerCoroutine (M ls e) s, SafeCopy a)
+  => ServerCoroutine (M ls e) (a :?: s) where
   serve (Co.R f) = serve =<< f =<< get
 
-instance (ServerCoroutine (M ls) s, SafeCopy a)
-  => ServerCoroutine (M ls) (a :!: s) where
+instance (ServerCoroutine (M ls e) s, SafeCopy a)
+  => ServerCoroutine (M ls e) (a :!: s) where
   serve (Co.W h) = h >>= \ (a, s) -> put a >> serve s
 
-instance (ServerCoroutine (M ls) s1, ServerCoroutine (M ls) s2)
-  => ServerCoroutine (M ls) (s1 :&: s2) where
+instance (ServerCoroutine (M ls e) s1, ServerCoroutine (M ls e) s2)
+  => ServerCoroutine (M ls e) (s1 :&: s2) where
   serve (Co.O h) = h >>= \ (s1, s2) -> get >>= \case
     False -> serve s1
     True  -> serve s2
@@ -284,6 +300,6 @@ instance (ServerCoroutine m s, Monad m)
   => ServerCoroutine m (Co.Repeat s) where
   serve (Co.Repeat s) = serve s
 
-instance (ServerCoroutine (M ls) s, ServerCoroutine (M ls) r)
-  => ServerCoroutine (M ls) (s :?* r) where
+instance (ServerCoroutine (M ls e) s, ServerCoroutine (M ls e) r)
+  => ServerCoroutine (M ls e) (s :?* r) where
   serve (Co.StarS s) = serve s

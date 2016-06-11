@@ -21,6 +21,7 @@ module Web.Widgets
   , asyncEvent
   , afterBuildAsync
   , Html, html
+  , editDynamic
   , editText
   , editTextAutofocus
   , editTextAutofocus'
@@ -31,6 +32,7 @@ module Web.Widgets
   , buttonDynAttr
   , leftRightAlign
   , openExternal
+  , getHost
   , consumeEvent
 
   , forDynM
@@ -70,8 +72,9 @@ import           GHCJS.DOM.Types         (Document, IsElement)
 import           GHCJS.DOM.Window        (Window, open)
 import qualified JavaScript.WebSockets.Reflex.WebSocket as WS
 import           Reflex.Dom
-import           Reflex.Dom.Widget.Basic
 import           Reflex.Dom.Contrib.Widgets.Common
+import           Reflex.Dom.Location     (getLocationHost)
+import           Reflex.Dom.Widget.Basic
 import           Reflex.Host.Class       (MonadReflexCreateTrigger, newEventWithTrigger, newFanEventWithTrigger)
 
 
@@ -195,6 +198,10 @@ html h = do
   (e, ()) <- el' "span" blank
   setOuterHTML (_el_element e) $ Just h
 
+editDynamic :: (MonadWidget t m) =>
+  Edit t m a -> Dynamic t a -> C t m (Dynamic t a)
+editDynamic e d = fmap joinDyn . holdDyn d =<< forDynM d e
+
 editText :: (MonadWidget t m) => Text -> m (Dynamic t Text)
 editText t = fst <$> editText' t
 
@@ -254,6 +261,9 @@ openExternal = push $ \ url -> liftIO currentWindow >>= \case
   Just w  -> do
     liftIO $ putStrLn "opening external window..."
     open w url "export" ""
+
+getHost :: (MonadWidget t m) => m String
+getHost = liftIO . getLocationHost =<< askWebView
 
 consumeEvent :: (MonadWidget t m) => Event t a -> m ()
 consumeEvent e = dynText =<< holdDyn "" ("" <$ e)
@@ -320,6 +330,7 @@ tabs ts = mdo
   joinDyn <$> holdDyn iD aD
  where
   e = error "Web.Widgets.tabs: undefined index"
+
 holdDynInit :: (Reflex t, MonadHold t m) =>
   Dynamic t a -> Event t a -> m (Dynamic t a)
 holdDynInit d e = do
