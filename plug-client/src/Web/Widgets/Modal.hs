@@ -6,7 +6,7 @@ module Web.Widgets.Modal
   , info
   ) where
 
-import Web.Widgets 
+import           Web.Widgets
 
 import           Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Data.Map                 as Map

@@ -33,6 +33,8 @@ module Web.Widgets
   , leftRightAlign
   , openExternal
   , getHost
+  , getProtocol
+  , getWebsocketServer
   , consumeEvent
 
   , forDynM
@@ -264,6 +266,18 @@ openExternal = push $ \ url -> liftIO currentWindow >>= \case
 
 getHost :: (MonadWidget t m) => m String
 getHost = liftIO . getLocationHost =<< askWebView
+
+getProtocol :: (MonadWidget t m) => m String
+getProtocol = liftIO . getLocationProtocol =<< askWebView
+
+getWebsocketServer :: (MonadWidget t m) => m String
+getWebsocketServer = do
+  host <- getHost
+  protocol <- getProtocol
+  let ws = case protocol of
+        "http:"  -> "ws://"
+        "https:" -> "wss://"
+  return $ ws ++ host ++ "/"
 
 consumeEvent :: (MonadWidget t m) => Event t a -> m ()
 consumeEvent e = dynText =<< holdDyn "" ("" <$ e)
