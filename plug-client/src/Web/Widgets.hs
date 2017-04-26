@@ -19,6 +19,7 @@ module Web.Widgets
   , focussed
   , hovered
   , asyncEvent
+  , asyncEventIO
   , afterBuildAsync
   , Html, html
   , editDynamic
@@ -171,6 +172,14 @@ asyncEvent = do
     \ trigger -> liftIO . void . forkIO . forever $
       readChan chan >>= trigger
   return (event, liftIO . writeChan chan)
+asyncEventIO :: (MonadWidget t m) => m (Event t a, a -> IO ())
+asyncEventIO = do
+  chan <- liftIO newChan
+  postBuild <- getPostBuild
+  event <- performEventAsync . ffor postBuild . const $
+    \ trigger -> liftIO . void . forkIO . forever $
+      readChan chan >>= trigger
+  return (event, writeChan chan)
 
 afterBuildAsync :: (MonadWidget t m) => C t IO () -> C t m ()
 afterBuildAsync h = do
