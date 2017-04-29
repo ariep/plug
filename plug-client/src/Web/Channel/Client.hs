@@ -25,7 +25,7 @@ import Web.Widgets (C, Make, Address, Tag, runC')
 import           Control.Concurrent          (modifyMVar, modifyMVar_)
 import qualified Control.Coroutine.Monadic   as Co
 import           Control.Coroutine.Monadic   (Session, Eps, (:!:), (:?:), (:?*), (:&:))
-import           Control.Monad.Exception (onException)
+import           Control.Monad.Exception     (MonadException, onException)
 import           Control.Monad.IO.Class      (MonadIO, liftIO)
 import           Control.Monad.Reader        (runReaderT, ask)
 import qualified Data.ByteString.Lazy        as BSL
@@ -45,9 +45,9 @@ import           JavaScript.Web.Blob         (Blob)
 import           Reflex.Dom
 
 
-runC :: (MonadWidget t m) => Bool -> String -> C t m a -> m a
+runC :: (MonadWidget t m, MonadException m) => Bool -> Text.Text -> C t m a -> m a
 runC debug server page = do
-  ws <- WS.connect debug (Text.pack server)
+  ws <- WS.connect debug server
     `onException` (text "Error: the server could not be contacted.")
   let selector = fanMap . fmap (uncurry Map.singleton . messageRead) $
         WS.receiveMessages ws

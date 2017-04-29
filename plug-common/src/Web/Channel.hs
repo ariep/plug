@@ -4,6 +4,7 @@ module Web.Channel where
 import           Control.Coroutine.Monadic (Repeat, Eps, (:?:), (:!:), (:&:))
 import qualified Data.ByteString.Lazy       as BSL
 -- import qualified Data.ByteString.Lazy.Char8 as BSL8
+import           Data.Change               (Changing, Changes)
 import qualified Data.ID                    as ID
 import           Data.List                 (intercalate)
 
@@ -30,11 +31,47 @@ data Channel s
 data File
   = File BSL.ByteString
 
-type Interest i
-  = Repeat ((i, Bool) :?: Eps)
+-- Interest/push/pull mechanism, for objects of type a identified by type i.
 
-type Change a
+-- type Interest i a
+--   = Repeat
+--     ( (i :?: a :!: Eps) -- Announce interest; receive current object.
+--       :&:
+--       (i :?:       Eps) -- Drop interest.
+--     )
+
+type PullChange a
+  = Repeat (Changes a :!: Eps)
+
+type PushChange a
+  = Repeat (Changes a :?: Eps)
+
+-- data InterestPushPull i a
+--
+-- interest :: Token (InterestPushPull i a) -> Channel (Interest i a)
+-- interest (Token l) = Channel $ l ++ [0]
+
+-- pullChange :: Token (InterestPushPull i a) -> Channel (PullChange a)
+-- pullChange (Token l) = Channel $ l ++ [1]
+
+-- pushChange :: Token (InterestPushPull i a) -> Channel (PushChange a)
+-- pushChange (Token l) = Channel $ l ++ [2]
+
+-- Initial/push/pull mechanism for objects of type a.
+
+type Initial a
   = Repeat (a :!: Eps)
+
+data InitialPushPull a
+
+initial :: Token (InitialPushPull a) -> Channel (Initial a)
+initial (Token l) = Channel $ l ++ [0]
+
+pullChange :: Token (InitialPushPull a) -> Channel (PullChange a)
+pullChange (Token l) = Channel $ l ++ [1]
+
+pushChange :: Token (InitialPushPull a) -> Channel (PushChange a)
+pushChange (Token l) = Channel $ l ++ [2]
 
 -- ID
 
@@ -79,9 +116,9 @@ deleteID (Token l) = Channel $ l ++ [5]
 markDeletedID :: Token (CRUD a) -> Channel (MarkDeletedID a)
 markDeletedID (Token l) = Channel $ l ++ [6]
 
-interestID :: Token (CRUD a) -> Channel (Interest (ID.ID a))
-interestID (Token l) = Channel $ l ++ [7]
+-- interestID :: Token (CRUD a) -> Channel (Interest (ID.ID a))
+-- interestID (Token l) = Channel $ l ++ [7]
 
-changeID :: Token (CRUD a) -> Channel (Change [ID.WithID a])
-changeID (Token l) = Channel $ l ++ [8]
+-- pullChangeID :: Token (CRUD a) -> Channel (PullChange (ID.WithID a))
+-- pullChangeID (Token l) = Channel $ l ++ [8]
 

@@ -1,0 +1,48 @@
+resolver: lts-5.15
+
+packages:
+- plug-common
+- plug-server
+# - location: /home/arie/dev/web/plug
+- location:
+    git: https://github.com/ariep/Coroutine.git
+    commit: 4ece5738cc0e204a9c7a4bd2bfba01b8f482553d
+  extra-dep: true
+- location:
+    git: https://github.com/ariep/TCache.git
+    commit: ce63714e8cfd764bd3547229e93bbe5d4f94d71c
+  extra-dep: true
+- location:
+    git: https://github.com/ariep/ID.git
+    commit: f5ffbb02d3e20feef23fce294946676bbf5d5afc
+  extra-dep: true
+- location:
+    git: https://github.com/ariep/text-index.git
+    commit: c563bd828b5d09b0ed9c4b83762b82c8dec2ee73
+  extra-dep: true
+- location:
+    git: https://github.com/ariep/oauth2-google.git
+    commit: 3845964ca341c5818a8a27369d511739dd749606
+  extra-dep: true
+- location:
+    git: https://github.com/ariep/language-spelling.git
+    commit: 98936c01f0fc0baf35b24e9ae975a5d808123aa3
+  subdirs: [tst]
+  extra-dep: true
+- location:
+    git: https://github.com/ariep/psqueues.git
+    commit: 1b9d87511bce9f5a3e4db6fa46a43dc03a965308
+  extra-dep: true
+
+extra-deps:
+  - cereal-text-0.1.0.1
+  - directory-1.2.6.3
+  - functor-infix-0.0.3
+  - parsec-extra-0.1.0.5
+
+# Override default flag values for local packages and extra-deps
+flags: {}
+
+# Extra package databases containing global packages
+extra-package-dbs: []
+

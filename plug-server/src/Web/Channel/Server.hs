@@ -17,13 +17,15 @@ module Web.Channel.Server
   , Session
   , getSession
   , getLocalState
+  , ConnectionID
+  , getConnectionID
   , except
   ) where
 
 import Web.Channel
 
 import qualified Control.Concurrent              as Conc
-import           Control.Concurrent.MVar   (MVar, newMVar, readMVar, modifyMVar_)
+import           Control.Concurrent.MVar   (MVar, newMVar, readMVar, modifyMVar_, modifyMVar)
 import qualified Control.Concurrent.Thread.Group as Threads
 import qualified Control.Coroutine.Monadic       as Co
 import           Control.Coroutine.Monadic ((:?:), (:!:), (:&:), (:++:), (:?*))
@@ -74,25 +76,27 @@ data Config ls
     }
 
 application :: (Show e) => Config ls -> [ServedChannel ls e] ->
-  WS.ServerApp
-application conf channels pending = do
-  let headers = WS.requestHeaders $ WS.pendingRequest pending
-      sessionCookie = join .
-        fmap (lookup .
-          BS8.pack . Text.unpack .
-          Session.getCookieName . sessionState $ conf) .
-        fmap Cookie.parseCookies .
-        lookup "Cookie" $ headers
-  originCheck (domain conf) headers reject $ bracket
-    (Wai.sessionStore (sessionState conf) sessionCookie)
-    (\ (_, save) -> save) -- Does not set new cookie value.
-      $ \ (s, _) -> do
-        ws <- WS.acceptRequest pending
-        WS.forkPingThread ws 5
-        si <- randomIO
-        runChannels (ws, si) s (newLocalState conf) channels
+  IO WS.ServerApp
+application conf channels = do
+  cons <- newConnectionsState
+  return $ \ pending -> do
+    let headers = WS.requestHeaders $ WS.pendingRequest pending
+        sessionCookie = join .
+          fmap (lookup .
+            BS8.pack . Text.unpack .
+            Session.getCookieName . sessionState $ conf) .
+          fmap Cookie.parseCookies .
+          lookup "Cookie" $ headers
+    originCheck (domain conf) headers (reject pending) $ bracket
+      (Wai.sessionStore (sessionState conf) sessionCookie)
+      (\ (_, save) -> save) -- Does not set new cookie value.
+        $ \ (s, _) -> do
+          ws <- WS.acceptRequest pending
+          WS.forkPingThread ws 5
+          conInfo <- newConnection cons
+          runChannels (ws, conInfo) s (newLocalState conf) channels
  where
-  reject reason = do
+  reject pending reason = do
     putStrLn reason
     WS.rejectRequest pending . BS8.pack $ reason
   -- originCheck :: URI -> [(CI BS8.ByteString, BS8.ByteString)]
@@ -122,7 +126,19 @@ type ServerChan
   = (Conc.Chan (Maybe Tag, BSL.ByteString), Conc.ThreadId, MVar (Maybe Tag))
 
 type Connection
-  = (WS.Connection, Int)
+  = (WS.Connection, ConnectionID)
+
+type ConnectionID
+  = Int
+
+type ConnectionsState
+  = MVar Int -- counter
+
+newConnectionsState :: IO ConnectionsState
+newConnectionsState = newMVar 0
+
+newConnection :: ConnectionsState -> IO ConnectionID
+newConnection cons = modifyMVar cons (\ i -> return (succ i, i))
 
 data WebsocketClosed
   = WebsocketClosed
@@ -148,7 +164,7 @@ receiveMessages (ws, _si) channels = do
             Conc.putMVar binaryLock i
             WS.sendTextData ws $ BSL8.pack "!" <> serial
       WS.Text bs   -> do
-        let (i, message) = readAddress bs 
+        let (i, message) = readAddress bs
         case Map.lookup (BSL8.unpack $ fst i) channels of
           Just (c, _, _) -> Conc.writeChan c . (,) (snd i) $
             B64.decodeLenient message
@@ -180,7 +196,7 @@ receiveByteString :: ServerChan -> IO BSL.ByteString
 receiveByteString (chan, _, _) = snd <$> Conc.readChan chan
 
 sendSerialized :: (SafeCopy a) => Connection -> Label -> MVar (Maybe Tag) -> a -> IO ()
-sendSerialized (ws, si) l tagM x = do
+sendSerialized (ws, _si) l tagM x = do
   mTag <- readMVar tagM
   WS.sendTextData ws . label mTag l . B64.encode . C.runPutLazy . safePut $ x
  where
@@ -191,8 +207,6 @@ sendSerialized (ws, si) l tagM x = do
 data ServedChannel ls e where
   ServeChannel :: (ServerCoroutine (M ls e) s) =>
     Channel s -> Co.Session (M ls e) s Co.Eps () -> ServedChannel ls e
-  -- AsyncChannel :: (ServerCoroutine M s, s ~ Repeat r) =>
-  --   Channel s -> Co.Session M s Co.Eps () -> ServedChannel
 
 runChannels :: (Show e) =>
   Connection -> Session -> IO ls -> [ServedChannel ls e] -> IO ()
@@ -233,7 +247,7 @@ type Session
 
 newtype M ls e a
   = M
-    (ReaderT (Connection, Session, Label, ServerChan, ls) 
+    (ReaderT (Connection, Session, Label, ServerChan, ls)
       (ExceptT e IO)
     a)
   deriving (Functor, Applicative, Monad, MonadIO)
@@ -262,6 +276,9 @@ put a = M . ReaderT $ \ (cn, _, l, (_, _, tagM), _) -> lift $ sendSerialized cn 
 
 getLocalState :: M ls e ls
 getLocalState = M . ReaderT $ \ (_, _, _, _, ls) -> return ls
+
+getConnectionID :: M ls e ConnectionID
+getConnectionID = M . ReaderT $ \ ((_ws, ci), _, _, _, _) -> return ci
 
 class ServerCoroutine m s where
   serve :: Co.InSession m s a -> m a

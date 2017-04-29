@@ -1,7 +1,9 @@
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Web.Widgets.DragAndDrop where
 
 import Web.Widgets
@@ -12,13 +14,14 @@ import           Control.Monad.IO.Class  (MonadIO, liftIO)
 import           Data.Foldable           (for_)
 import qualified Data.Map                 as Map
 import           Data.Monoid             ((<>))
+import           Data.Text               (Text)
 import           Data.Traversable        (for)
 import           GHCJS.DOM.DataTransfer  (setData)
 import           GHCJS.DOM.Element       (mouseUp, mouseDown, dragStart, dragEnd, dragEnter, dragLeave, dragOver, drop, setAttribute)
 import           GHCJS.DOM.EventM        (on, event, preventDefault, target)
 import           GHCJS.DOM.Node          (Node, contains)
 import           GHCJS.DOM.MouseEvent    (getDataTransfer)
-import           Reflex.Dom
+import           Reflex.Dom hiding (preventDefault)
 import           Reflex.Dom.Widget.Basic
 import           Reflex.Dom.Contrib.Widgets.Common
 
@@ -55,11 +58,11 @@ dragAndDrop = do
       result <- body
       (consumeEvent =<<) . wrapDomEvent h (`on` mouseDown) $ do
         t :: Maybe Node <- target
-        contains h t >>= setAttribute h "draggable" . show
+        contains h t >>= setAttribute h ("draggable" :: Text) . show
       (consumeEvent =<<) . wrapDomEvent h (`on` dragStart) $ do
         liftIO $ putMVar mvar (Just drag)
         (event >>= getDataTransfer >>=) . flip for_ $ \ dt ->
-          setData dt "text/plain" "unused"
+          setData dt ("text/plain" :: Text) ("unused" :: Text)
       (consumeEvent =<<) . wrapDomEvent h (`on` dragEnd) $
         liftIO $ putMVar mvar Nothing
       return result
@@ -72,7 +75,7 @@ dragAndDrop = do
         (consumeEvent =<<) . wrapDomEvent h (`on` dragStart) $ do
           liftIO $ putMVar mvar (Just drag)
           (event >>= getDataTransfer >>=) . flip for_ $ \ dt ->
-            setData dt "text/plain" "unused"
+            setData dt ("text/plain" :: Text) ("unused" :: Text)
         (consumeEvent =<<) . wrapDomEvent h (`on` dragEnd) $
           liftIO $ putMVar mvar Nothing
         return result
@@ -88,8 +91,8 @@ dragAndDrop = do
     eligibleD <- mapDyn (maybe False $ flip dndFilter dropItem) dragging
     attrs <- (\ f -> combineDyn f eligibleD overD) $ \ eligible over ->
       Map.singleton "class" $
-        (if eligible then (++ " dnd-eligible") else id) $
-        (if over     then (++ " dnd-over"    ) else id) $
+        (if eligible then (<> " dnd-eligible") else id) $
+        (if over     then (<> " dnd-over"    ) else id) $
           "dnd-dropzone"
     dropE <- wrapDomEvent (_el_element e) (`on` drop) $ do
       preventDefault

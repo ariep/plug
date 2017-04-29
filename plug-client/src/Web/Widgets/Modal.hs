@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Web.Widgets.Modal
   ( modal
   , dialogue
@@ -11,6 +12,7 @@ import           Web.Widgets
 import           Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Data.Map                 as Map
 import           Data.Monoid            ((<>))
+import           Data.Text              (Text)
 import           Data.Traversable       (for)
 import           GHCJS.DOM              (currentWindow, currentDocument)
 import           GHCJS.DOM.Document     (execCommand)
@@ -24,7 +26,7 @@ import qualified Reflex.Dom.Contrib.Widgets.Modal as Modal
 
 
 dialogueOld :: (MonadWidget t m)
-  => Event t a -> String -> String -> m ()
+  => Event t a -> Text -> Text -> m ()
   -> (a -> m (Dynamic t (Either e b))) -> m (Event t b)
 dialogueOld open cancelText continueText header body = modalSuccess =<< Modal.removingModal
   (Modal.ModalConfig Map.empty)
@@ -47,12 +49,12 @@ dialogueOld open cancelText continueText header body = modalSuccess =<< Modal.re
 
 
 dialogue :: (MonadWidget t m)
-  => Event t a -> String -> String -> String -> m ()
+  => Event t a -> Text -> Text -> Text -> m ()
   -> (a -> m (Dynamic t (Either e b))) -> m (Event t b)
 dialogue open = dialogueExtraFooter open (const $ return never)
 
 dialogueExtraFooter :: (MonadWidget t m)
-  => Event t a -> (a -> m (Event t ())) -> String -> String -> String -> m ()
+  => Event t a -> (a -> m (Event t ())) -> Text -> Text -> Text -> m ()
   -> (a -> m (Dynamic t (Either e b))) -> m (Event t b)
 dialogueExtraFooter open extra cancelText continueText continueClass h b = modal open $
   \ header body footer a -> do
@@ -60,7 +62,7 @@ dialogueExtraFooter open extra cancelText continueText continueClass h b = modal
     state <- body (b a)
     (extraE, (success, cancel)) <- footer $ leftRightAlign (extra a) $ do
       cancel <- buttonClass "btn btn-default" cancelText
-      attrs <- mapDyn (($ "class" =: ("btn " ++ continueClass)) .
+      attrs <- mapDyn (($ "class" =: ("btn " <> continueClass)) .
         either (const $ mappend $ "disabled" =: "disabled") (const id)) state
       continue <- buttonDynAttr attrs $ text continueText
       let success = attachDynWithMaybe
@@ -87,14 +89,14 @@ modal open body = switchJust =<< Modal.removingModal
   )
 
 confirm :: (MonadWidget t m)
-  => String -> String -> String -> String -> Event t a -> m (Event t a)
+  => Text -> Text -> Text -> Text -> Event t a -> m (Event t a)
 confirm question cancelText continueText continueClass w = dialogue
   w cancelText continueText continueClass blank $ \ a -> do
     text question
     return $ constDyn $ Right a
 
 info :: (MonadWidget t m)
-  => Event t a -> String -> m ()
+  => Event t a -> Text -> m ()
   -> (a -> m ()) -> m (Event t ())
 info open continueText h b = modal open $
   \ header body footer a -> do

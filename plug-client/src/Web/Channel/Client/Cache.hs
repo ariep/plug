@@ -71,5 +71,5 @@ lookup c q = do
 -- refresh :: (Hashable query, Eq query, MonadWidget t m) =>
 --   Cache t query result -> Query t m query result ->
 --   C t m ()
--- refresh cache query = 
+-- refresh cache query =
 

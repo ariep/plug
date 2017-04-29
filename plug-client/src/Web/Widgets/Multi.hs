@@ -1,6 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Web.Widgets.Multi
   ( editMulti
   , selectFrom
@@ -11,13 +12,14 @@ import Web.Widgets
 
 import           Control.Monad.IO.Class (MonadIO)
 import qualified Data.Map                 as Map
+import           Data.Monoid            ((<>))
 import           Reflex.Dom
 import           Reflex.Dom.Widget.Basic
 
 editMulti :: (MonadWidget t m) =>
   Bool -> (Bool -> Edit t m a) -> a -> Edit t m [a]
 editMulti inline editSingle empty initial = divClass
-  ((if inline then (++ " multi-inline") else id) "multi") $ mdo
+  ((if inline then (<> " multi-inline") else id) "multi") $ mdo
   inputs :: Dynamic t (Map.Map Int
     (Dynamic t a, Event t (Map.Map Int (Maybe a))))
     <- listWithKeyShallowDiff

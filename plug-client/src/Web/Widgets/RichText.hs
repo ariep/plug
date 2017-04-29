@@ -1,13 +1,17 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE FlexibleContexts #-}
-module Web.Widgets.RichText where
+{-# LANGUAGE OverloadedStrings #-}
+module Web.Widgets.RichText
+  ( richText
+  )where
 
 import           Web.Widgets
 
 import           Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Data.Map                 as Map
 import           Data.Monoid            ((<>))
+import           Data.Text              (Text)
 import           GHCJS.DOM              (currentWindow, currentDocument)
 import           GHCJS.DOM.Document     (execCommand)
 import           GHCJS.DOM.Element      (getInnerHTML, setInnerHTML, setOuterHTML)
@@ -18,7 +22,10 @@ import           Reflex.Dom.Widget.Basic
 
 
 type Image
-  = String
+  = Text
+
+type Html
+  = Text
 
 richText :: forall t m. (MonadWidget t m, MonadIO (PushM t))
   => Maybe (Event t () -> m (Event t Image)) -> Html -> m (Dynamic t Html)
@@ -44,7 +51,7 @@ richText getImage initial = divClass "rt-container panel" $ do
         (domEvent Input e) -- TODO: does not work in IE
   holdDyn initial changed
  where
-  editButton :: Document -> El t -> String -> String -> m ()
+  editButton :: Document -> El t -> Text -> Text -> m ()
   editButton doc e a t = do
     b <- buttonClass "btn btn-default btn-xs" t
     onEvent b $ \ () -> do
@@ -62,9 +69,8 @@ richText getImage initial = divClass "rt-container panel" $ do
       focus $ _el_element e
       command doc "insertImage" (Just i)
 
-command :: (MonadIO m) => Document -> String -> Maybe String -> m ()
+command :: (MonadIO m) => Document -> Text -> Maybe Text -> m ()
 command doc cmd arg = execCommand doc cmd False arg >>= \case
   True  -> return ()
   False -> liftIO $ putStrLn $
     "Web.Widgets.richText: command " ++ show cmd ++ " failed."
-
