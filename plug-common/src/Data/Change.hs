@@ -1,4 +1,5 @@
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Change where
@@ -12,6 +13,8 @@ class (Monoid (Changes a)) => Changing a where
   type Changes a
   type instance Changes a = Replace a
   apply :: Changes a -> a -> a
+  default apply :: Replace a -> a -> a
+  apply = replacing
 
 newtype Replace a
   = Replace (Maybe a)

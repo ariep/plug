@@ -43,7 +43,6 @@ module Web.Widgets
   , getWebsocketServer
   , consumeEvent
 
-  , forDynEvent
   , dynEvent
   , onEvent
   , holdDynInit
@@ -251,16 +250,6 @@ afterBuildAsync h = do
 type Html
   = Text
 
--- forDynM_ :: (MonadWidget t m) => Dynamic t a -> (a -> m ()) -> m ()
--- forDynM_ d f = fmap (const ()) . dyn =<< mapDyn f d
-
--- Dynamic t a -> (forall m'. MonadSample t m' => a -> m' b) -> m (Dynamic t b)
--- forDynM :: (MonadWidget t m) => Dynamic t a -> (a -> m b) -> m (Event t b)
--- forDynM d f = dyn =<< mapDyn f d
-
-forDynEvent :: (MonadWidget t m) => Dynamic t a -> (a -> m (Event t b)) -> m (Event t b)
-forDynEvent d f = switchPromptly never =<< dyn =<< mapDyn f d
-
 dynEvent :: (MonadWidget t m) => Dynamic t (m (Event t a)) -> m (Event t a)
 dynEvent = (switchPromptly never =<<) . dyn
 
@@ -274,7 +263,6 @@ html h = do
 
 editDynamic :: (MonadWidget t m) =>
   Edit t m a -> Dynamic t a -> C t m (Dynamic t a)
--- editDynamic e d = fmap joinDyn . holdDyn d . updated =<< forDynM d e
 editDynamic e d = fmap join . holdDyn d =<< dyn (fmap e d)
 
 editText :: (MonadWidget t m) => Text -> m (Dynamic t Text)
@@ -355,15 +343,6 @@ getWebsocketServer = do
 
 consumeEvent :: (MonadWidget t m) => Event t a -> m ()
 consumeEvent e = dynText =<< holdDyn "" ("" <$ e)
-
--- toggleModes' :: (MonadWidget t m) =>
---   C t m (Event t ()) -> C t m (Event t ()) -> Make t m Bool
--- toggleModes' a b = mdo
---   toggleA <- forDynEvent d $ \case
---     True  -> fmap (const False) <$> a
---     False -> fmap (const True ) <$> b
---   d <- holdDyn True toggleA
---   return d
 
 toggleModes :: (MonadWidget t m) =>
   C t m (Event t ()) -> C t m (Event t ()) -> Make t m (Either () ())
