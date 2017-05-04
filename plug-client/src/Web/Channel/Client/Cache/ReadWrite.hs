@@ -6,7 +6,9 @@
 {-# LANGUAGE FlexibleContexts #-}
 module Web.Channel.Client.Cache.ReadWrite
   ( Cache
+  , CacheIPP
   , create
+  , createIPP
   , update
   , current
   ) where
@@ -44,13 +46,16 @@ import           Web.Widgets               (C, Make, Address, Tag, asyncEventIO,
 --     , locals  :: Event t a
 --     , trigger :: a -> C t m ()
 --     }
-data Cache t x
+data Cache t x c
   = Cache
     { current  :: Dynamic t (Maybe x)
-    , updateIO :: Change.Changes x -> IO ()
+    , updateIO :: c -> IO ()
     }
 
-update :: (MonadWidget t m) => Cache t x -> Event t (Change.Changes x) -> m ()
+type CacheIPP t x
+  = Cache t x (Change.Changes x)
+
+update :: (MonadWidget t m) => Cache t x c -> Event t c -> m ()
 update c e = onEvent e (liftIO . updateIO c)
 
 class (Change.Changing x) => Cachable x where
@@ -77,26 +82,38 @@ instance (Change.Changing v, Ord k, Hashable k) => Cachable (Map.Map k v) where
 
 -- Note: waits for changes to come back via the server before they are
 -- reflected in the cache.
-create :: forall t m x.
+create :: forall t m x c.
   -- ( Cachable x
+  ( Change.Changing x
+  , SafeCopy x
+  , SafeCopy (Change.Changes x)
+  , SafeCopy c
+  , MonadWidget t m
+  ) =>
+  Ch.Channel (Ch.Initial x) ->
+  Ch.Channel (Ch.PullChange x) ->
+  Ch.Channel (Repeat (c :?: Eps)) ->
+  C t m (Cache t x c)
+create initialChannel pullChannel pushChannel = do
+  initial <- Ch.getMany initialChannel
+  change <- Ch.getMany pullChannel
+  let allE = leftmost [Left <$> initial, Right <$> change]
+  cur <- foldDyn f Nothing allE
+  (localChangeE, tr) <- asyncEventIO
+  Ch.sendMany pushChannel localChangeE
+  return $ Cache cur tr
+ where
+  f (Left x)  _   = Just x
+  f (Right c) old = fmap (Change.apply c) old
+
+createIPP :: forall t m x.
   ( Change.Changing x
   , SafeCopy x
   , SafeCopy (Change.Changes x)
   , MonadWidget t m
   ) =>
-  Ch.Token (Ch.InitialPushPull x) -> C t m (Cache t x)
-create t = do
-  -- cache <- liftIO $ atomically $ newCache (Proxy :: Proxy x)
-  initial <- Ch.getMany $ Ch.initial t
-  change <- Ch.getMany $ Ch.pullChange t
-  let allE = leftmost [Left <$> initial, Right <$> change]
-  cur <- foldDyn f Nothing allE
-  (localChangeE, tr) <- asyncEventIO
-  Ch.sendMany (Ch.pushChange t) localChangeE
-  return $ Cache cur tr
- where
-  f (Left x)  _   = Just x
-  f (Right c) old = fmap (Change.apply c) old
+  Ch.Token (Ch.InitialPushPull x) -> C t m (CacheIPP t x)
+createIPP t = create (Ch.initial t) (Ch.pullChange t) (Ch.pushChange t)
 
 -- data Pending
 --   = Pending
