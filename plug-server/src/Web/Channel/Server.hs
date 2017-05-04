@@ -200,7 +200,7 @@ sendSerialized (ws, _si) l tagM x = do
   mTag <- readMVar tagM
   WS.sendTextData ws . label mTag l . B64.encode . C.runPutLazy . safePut $ x
  where
-  label mTag = mappend  . (<> ":"). tag mTag . BSL8.pack
+  label mTag = mappend . (<> ":") . tag mTag . BSL8.pack
   tag = maybe id (\ t a -> a <> ";" <> t)
 
 

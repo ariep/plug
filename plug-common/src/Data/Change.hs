@@ -80,13 +80,15 @@ instance (Changing v, Ord k) => Changing (Map.Map k v) where
   type Changes (Map.Map k v) = [MapChange k v]
   apply = foldr (.) id . map go where
     go (MapAdd k v)    = Map.insert k v
+    go (MapEnsure k v) = Map.insertWith (flip const) k v
     go (MapModify k c) = Map.adjust (apply c) k
     go (MapDelete k)   = Map.delete k
 
 data MapChange k v
-  = MapAdd k v
-  | MapModify k (Changes v)
-  | MapDelete k
+  = MapAdd k v              -- Add to map, replacing if key present.
+  | MapEnsure k v           -- Add to map, do not replace if key present.
+  | MapModify k (Changes v) -- Modify at given key, do nothing if not present.
+  | MapDelete k             -- Delete at given key, do nothing if not present.
 
 instance (Ord k) => Changing (Set.Set k) where
   type Changes (Set.Set k) = [SetChange k]
