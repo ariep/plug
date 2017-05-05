@@ -9,6 +9,7 @@
 module Web.Channel.Server
   ( withWebSocketApp
 
+  , Services(Services)
   , ServedChannel(ServeChannel)
   , Config(..)
   , application
@@ -75,9 +76,18 @@ data Config ls
     , newLocalState :: IO ls
     }
 
-application :: (Show e) => Config ls -> [ServedChannel ls e] ->
+data Services gs ls e
+  = Services
+    [gs -> ServedChannel ls e] -- Channel servers
+    [gs -> ls -> ConnectionID -> IO ()] -- Cleanup actions
+
+instance Monoid (Services gs ls e) where
+  mempty = Services [] []
+  Services s₁ f₁ `mappend` Services s₂ f₂ = Services (s₁ ++ s₂) (f₁ ++ f₂)
+
+application :: (Show e) => gs -> Config ls -> Services gs ls e ->
   IO WS.ServerApp
-application conf channels = do
+application globalState conf services = do
   cons <- newConnectionsState
   return $ \ pending -> do
     let headers = WS.requestHeaders $ WS.pendingRequest pending
@@ -94,7 +104,7 @@ application conf channels = do
           ws <- WS.acceptRequest pending
           WS.forkPingThread ws 5
           conInfo <- newConnection cons
-          runChannels (ws, conInfo) s (newLocalState conf) channels
+          runChannels globalState (ws, conInfo) s (newLocalState conf) services
  where
   reject pending reason = do
     putStrLn reason
@@ -209,18 +219,21 @@ data ServedChannel ls e where
     Channel s -> Co.Session (M ls e) s Co.Eps () -> ServedChannel ls e
 
 runChannels :: (Show e) =>
-  Connection -> Session -> IO ls -> [ServedChannel ls e] -> IO ()
-runChannels cn session newLs scs = do
+  gs -> Connection -> Session -> IO ls -> Services gs ls e -> IO ()
+runChannels globalState cn session newLs (Services servers cleanups) = do
   tg <- Threads.new
   ls <- newLs
-  channelMap <- Map.fromList <$> mapM (runChannel tg cn session ls) scs
+  channelMap <- Map.fromList <$> mapM
+    (runChannel tg cn session ls)
+    (map ($ globalState) servers)
   receiveMessages cn channelMap
-    `finally` cleanUp channelMap tg
+    `finally` cleanUp channelMap tg ls
  where
-  cleanUp channelMap tg = do
+  cleanUp channelMap tg ls = do
     for_ (Map.elems channelMap) $ \ (_, threadId, _) ->
       Conc.throwTo threadId WebsocketClosed
     Threads.wait tg
+    mapM_ (\ f -> f globalState ls (snd cn)) cleanups
     -- putStrLn $ "Waited for all channels to finish, shutting down connection."
 
 runChannel :: (Show e) =>
